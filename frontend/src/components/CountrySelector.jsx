@@ -12,7 +12,7 @@ function CountrySelector({
   const [searchTerm, setSearchTerm] = useState('')
 
   const filteredCountries = useMemo(() => {
-    if (!searchTerm) return countries.slice(0, 50) // Limit to first 50 for performance
+    if (!searchTerm) return countries // Show all countries when no search term
     
     return countries
       .filter(country => 
@@ -20,7 +20,6 @@ function CountrySelector({
         country.capital.toLowerCase().includes(searchTerm.toLowerCase()) ||
         country.region.toLowerCase().includes(searchTerm.toLowerCase())
       )
-      .slice(0, 50)
   }, [countries, searchTerm])
 
   const handleSelect = (country) => {

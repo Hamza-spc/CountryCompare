@@ -43,8 +43,8 @@ function BarChart({ comparison, country1Name, country2Name }) {
           metrics.gdp_per_capita?.country1 || 0,
           (metrics.population?.country1 || 0) / 1000000 // Convert to millions
         ],
-        backgroundColor: 'rgba(59, 130, 246, 0.8)',
-        borderColor: 'rgba(59, 130, 246, 1)',
+        backgroundColor: 'rgba(239, 68, 68, 0.8)',
+        borderColor: 'rgba(239, 68, 68, 1)',
         borderWidth: 2,
         borderRadius: 8,
         borderSkipped: false,
@@ -56,8 +56,8 @@ function BarChart({ comparison, country1Name, country2Name }) {
           metrics.gdp_per_capita?.country2 || 0,
           (metrics.population?.country2 || 0) / 1000000 // Convert to millions
         ],
-        backgroundColor: 'rgba(16, 185, 129, 0.8)',
-        borderColor: 'rgba(16, 185, 129, 1)',
+        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+        borderColor: 'rgba(59, 130, 246, 1)',
         borderWidth: 2,
         borderRadius: 8,
         borderSkipped: false,

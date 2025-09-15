@@ -182,7 +182,7 @@ class APICache:
         APICache._cache.clear()
 
 # Helper functions
-def get_sample_economic_data(country_name, population):
+def get_sample_economic_data(country_name, population, region=None):
     """Generate sample economic data for demonstration purposes"""
     # This is sample data for demonstration - in production you'd fetch from World Bank API
     sample_data = {
@@ -218,7 +218,59 @@ def get_sample_economic_data(country_name, population):
             'life_expectancy': data.get('life_expectancy', 0),
             'internet_penetration': data.get('internet_penetration', 0)
         }
-    return {}
+    
+    # Fallback: Generate realistic economic data based on population and region
+    # This ensures all countries have economic data
+    region_multipliers = {
+        'Europe': 1.5,
+        'North America': 1.8,
+        'Asia': 0.8,
+        'South America': 0.6,
+        'Africa': 0.3,
+        'Oceania': 1.2
+    }
+    
+    # Estimate GDP based on population and region
+    base_gdp_per_capita = 5000  # Base GDP per capita
+    region_key = region if region else 'Asia'  # Use provided region or default to Asia
+    multiplier = region_multipliers.get(region_key, 0.8)  # Use region-specific multiplier
+    
+    # Adjust based on population size (larger countries tend to have lower per capita GDP)
+    if population > 100000000:  # Large countries
+        multiplier *= 0.7
+    elif population > 50000000:  # Medium countries
+        multiplier *= 0.9
+    elif population < 1000000:  # Small countries
+        multiplier *= 1.3
+    
+    estimated_gdp_per_capita = base_gdp_per_capita * multiplier
+    estimated_gdp = estimated_gdp_per_capita * population if population > 0 else 0
+    
+    # Estimate HDI based on GDP per capita
+    if estimated_gdp_per_capita > 50000:
+        estimated_hdi = 0.9 + (estimated_gdp_per_capita - 50000) / 1000000
+    elif estimated_gdp_per_capita > 20000:
+        estimated_hdi = 0.7 + (estimated_gdp_per_capita - 20000) / 100000
+    elif estimated_gdp_per_capita > 5000:
+        estimated_hdi = 0.5 + (estimated_gdp_per_capita - 5000) / 30000
+    else:
+        estimated_hdi = 0.3 + estimated_gdp_per_capita / 10000
+    
+    estimated_hdi = min(0.99, max(0.3, estimated_hdi))  # Clamp between 0.3 and 0.99
+    
+    # Estimate life expectancy based on HDI
+    estimated_life_expectancy = 50 + (estimated_hdi * 35)
+    
+    # Estimate internet penetration based on HDI
+    estimated_internet = min(95, max(5, estimated_hdi * 100))
+    
+    return {
+        'gdp': estimated_gdp,
+        'gdp_per_capita': estimated_gdp_per_capita,
+        'hdi': round(estimated_hdi, 3),
+        'life_expectancy': round(estimated_life_expectancy, 1),
+        'internet_penetration': round(estimated_internet, 1)
+    }
 
 def parse_country_data(country_data, additional_data=None):
     """Parse country data from REST Countries API"""
@@ -298,23 +350,38 @@ class CountriesResource(Resource):
             countries = Country.query.all()
             if countries:
                 result = [country.to_dict() for country in countries]
+                # Sort countries alphabetically by name
+                result.sort(key=lambda x: x.get('name', ''))
                 APICache.set(cache_key, result)
                 return jsonify(result)
             
             # If no data in database, fetch from API
+            logger.info("Fetching countries from REST Countries API...")
             countries_data = RestCountriesService.get_all_countries()
+            logger.info(f"Fetched {len(countries_data)} countries from API")
             result = []
             
-            for country_data in countries_data[:50]:  # Limit to first 50 for demo
+            for i, country_data in enumerate(countries_data):  # Load all countries
                 # Get economic data for this country
                 country_name = country_data.get('name', {}).get('common', 'Unknown')
                 population = country_data.get('population', 0)
-                additional_data = get_sample_economic_data(country_name, population)
+                region = country_data.get('region', 'Unknown')
+                additional_data = get_sample_economic_data(country_name, population, region)
                 
                 country_info = parse_country_data(country_data, additional_data)
                 if country_info:
-                    country = get_or_create_country(country_info)
-                    result.append(country.to_dict())
+                    try:
+                        country = get_or_create_country(country_info)
+                        result.append(country.to_dict())
+                        if i % 50 == 0:  # Log every 50 countries
+                            logger.info(f"Processed {i+1} countries...")
+                    except Exception as e:
+                        logger.error(f"Error processing country {i+1} ({country_name}): {e}")
+                else:
+                    logger.warning(f"Failed to parse country {i+1} ({country_name})")
+            
+            # Sort countries alphabetically by name
+            result.sort(key=lambda x: x.get('name', ''))
             
             APICache.set(cache_key, result)
             return jsonify(result)
@@ -339,7 +406,8 @@ class CountryResource(Resource):
             
             # Get economic data for this country
             population = country_data[0].get('population', 0)
-            additional_data = get_sample_economic_data(country_name, population)
+            region = country_data[0].get('region', 'Unknown')
+            additional_data = get_sample_economic_data(country_name, population, region)
             
             country_info = parse_country_data(country_data[0], additional_data)
             if not country_info:
