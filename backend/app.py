@@ -56,6 +56,7 @@ class ComparisonResult:
 
 # Database Models
 class Country(db.Model):
+    __tablename__ = 'countries'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     capital = db.Column(db.String(100), nullable=False)
@@ -92,6 +93,7 @@ class Country(db.Model):
         }
 
 class Comparison(db.Model):
+    __tablename__ = 'comparisons'
     id = db.Column(db.Integer, primary_key=True)
     country1_name = db.Column(db.String(100), nullable=False)
     country2_name = db.Column(db.String(100), nullable=False)
@@ -115,7 +117,8 @@ class RestCountriesService:
     def get_all_countries():
         """Fetch all countries from REST Countries API"""
         try:
-            response = requests.get(f"{RestCountriesService.BASE_URL}/all", timeout=10)
+            fields = "name,capital,population,area,region,subregion,currencies,flags"
+            response = requests.get(f"{RestCountriesService.BASE_URL}/all?fields={fields}", timeout=10)
             response.raise_for_status()
             return response.json()
         except requests.RequestException as e:
@@ -126,8 +129,9 @@ class RestCountriesService:
     def get_country_details(country_name):
         """Fetch details for a specific country"""
         try:
+            fields = "name,capital,population,area,region,subregion,currencies,flags"
             response = requests.get(
-                f"{RestCountriesService.BASE_URL}/name/{country_name}", 
+                f"{RestCountriesService.BASE_URL}/name/{country_name}?fields={fields}", 
                 timeout=10
             )
             response.raise_for_status()
@@ -178,6 +182,44 @@ class APICache:
         APICache._cache.clear()
 
 # Helper functions
+def get_sample_economic_data(country_name, population):
+    """Generate sample economic data for demonstration purposes"""
+    # This is sample data for demonstration - in production you'd fetch from World Bank API
+    sample_data = {
+        'Morocco': {'gdp': 126000000000, 'hdi': 0.683, 'life_expectancy': 76.1, 'internet_penetration': 74.4},
+        'Algeria': {'gdp': 163000000000, 'hdi': 0.748, 'life_expectancy': 77.0, 'internet_penetration': 63.0},
+        'Jamaica': {'gdp': 15000000000, 'hdi': 0.734, 'life_expectancy': 74.5, 'internet_penetration': 55.0},
+        'Comoros': {'gdp': 1200000000, 'hdi': 0.554, 'life_expectancy': 64.3, 'internet_penetration': 8.0},
+        'United Kingdom': {'gdp': 3100000000000, 'hdi': 0.929, 'life_expectancy': 81.3, 'internet_penetration': 95.0},
+        'Germany': {'gdp': 4200000000000, 'hdi': 0.942, 'life_expectancy': 81.0, 'internet_penetration': 90.0},
+        'Brazil': {'gdp': 1600000000000, 'hdi': 0.754, 'life_expectancy': 75.9, 'internet_penetration': 70.0},
+        'China': {'gdp': 18000000000000, 'hdi': 0.761, 'life_expectancy': 77.1, 'internet_penetration': 70.0},
+        'United States': {'gdp': 25000000000000, 'hdi': 0.921, 'life_expectancy': 78.9, 'internet_penetration': 90.0},
+        'Japan': {'gdp': 4900000000000, 'hdi': 0.919, 'life_expectancy': 84.6, 'internet_penetration': 93.0},
+        'India': {'gdp': 3400000000000, 'hdi': 0.645, 'life_expectancy': 70.4, 'internet_penetration': 45.0},
+        'France': {'gdp': 2900000000000, 'hdi': 0.901, 'life_expectancy': 82.7, 'internet_penetration': 88.0},
+        'Canada': {'gdp': 2000000000000, 'hdi': 0.929, 'life_expectancy': 82.3, 'internet_penetration': 95.0},
+        'Australia': {'gdp': 1600000000000, 'hdi': 0.944, 'life_expectancy': 83.4, 'internet_penetration': 90.0},
+        'South Korea': {'gdp': 1800000000000, 'hdi': 0.906, 'life_expectancy': 83.0, 'internet_penetration': 96.0},
+        'Italy': {'gdp': 2100000000000, 'hdi': 0.895, 'life_expectancy': 83.5, 'internet_penetration': 76.0},
+        'Spain': {'gdp': 1400000000000, 'hdi': 0.904, 'life_expectancy': 83.2, 'internet_penetration': 88.0},
+        'Mexico': {'gdp': 1300000000000, 'hdi': 0.779, 'life_expectancy': 75.0, 'internet_penetration': 70.0},
+        'Russia': {'gdp': 1800000000000, 'hdi': 0.824, 'life_expectancy': 73.2, 'internet_penetration': 80.0},
+        'South Africa': {'gdp': 420000000000, 'hdi': 0.713, 'life_expectancy': 64.3, 'internet_penetration': 60.0}
+    }
+    
+    data = sample_data.get(country_name, {})
+    if data:
+        gdp_per_capita = data['gdp'] / population if population > 0 else 0
+        return {
+            'gdp': data.get('gdp', 0),
+            'gdp_per_capita': gdp_per_capita,
+            'hdi': data.get('hdi', 0),
+            'life_expectancy': data.get('life_expectancy', 0),
+            'internet_penetration': data.get('internet_penetration', 0)
+        }
+    return {}
+
 def parse_country_data(country_data, additional_data=None):
     """Parse country data from REST Countries API"""
     try:
@@ -264,7 +306,12 @@ class CountriesResource(Resource):
             result = []
             
             for country_data in countries_data[:50]:  # Limit to first 50 for demo
-                country_info = parse_country_data(country_data)
+                # Get economic data for this country
+                country_name = country_data.get('name', {}).get('common', 'Unknown')
+                population = country_data.get('population', 0)
+                additional_data = get_sample_economic_data(country_name, population)
+                
+                country_info = parse_country_data(country_data, additional_data)
                 if country_info:
                     country = get_or_create_country(country_info)
                     result.append(country.to_dict())
@@ -290,7 +337,11 @@ class CountryResource(Resource):
             if not country_data:
                 return {'error': 'Country not found'}, 404
             
-            country_info = parse_country_data(country_data[0])
+            # Get economic data for this country
+            population = country_data[0].get('population', 0)
+            additional_data = get_sample_economic_data(country_name, population)
+            
+            country_info = parse_country_data(country_data[0], additional_data)
             if not country_info:
                 return {'error': 'Failed to parse country data'}, 500
             
