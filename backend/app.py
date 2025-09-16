@@ -219,50 +219,81 @@ def get_sample_economic_data(country_name, population, region=None):
             'internet_penetration': data.get('internet_penetration', 0)
         }
     
-    # Fallback: Generate realistic economic data based on population and region
-    # This ensures all countries have economic data
+    # Fallback: Generate realistic economic data based on population, region, and country characteristics
+    # This ensures all countries have economic data with realistic variation
+    
+    # More detailed region multipliers
     region_multipliers = {
-        'Europe': 1.5,
-        'North America': 1.8,
-        'Asia': 0.8,
-        'South America': 0.6,
-        'Africa': 0.3,
-        'Oceania': 1.2
+        'Europe': 1.8,
+        'North America': 2.0,
+        'Asia': 0.9,
+        'South America': 0.7,
+        'Africa': 0.4,
+        'Oceania': 1.5,
+        'Antarctic': 0.1
     }
     
-    # Estimate GDP based on population and region
-    base_gdp_per_capita = 5000  # Base GDP per capita
-    region_key = region if region else 'Asia'  # Use provided region or default to Asia
-    multiplier = region_multipliers.get(region_key, 0.8)  # Use region-specific multiplier
+    # Base GDP per capita by region
+    base_gdp_by_region = {
+        'Europe': 25000,
+        'North America': 30000,
+        'Asia': 8000,
+        'South America': 12000,
+        'Africa': 3000,
+        'Oceania': 20000,
+        'Antarctic': 1000
+    }
     
-    # Adjust based on population size (larger countries tend to have lower per capita GDP)
-    if population > 100000000:  # Large countries
-        multiplier *= 0.7
-    elif population > 50000000:  # Medium countries
-        multiplier *= 0.9
-    elif population < 1000000:  # Small countries
-        multiplier *= 1.3
+    region_key = region if region else 'Asia'
+    base_gdp_per_capita = base_gdp_by_region.get(region_key, 8000)
     
-    estimated_gdp_per_capita = base_gdp_per_capita * multiplier
+    # Add variation based on country name hash for uniqueness
+    import hashlib
+    country_hash = int(hashlib.md5(country_name.encode()).hexdigest()[:8], 16)
+    variation_factor = 0.5 + (country_hash % 100) / 100  # 0.5 to 1.5 multiplier
+    
+    # Adjust based on population size
+    if population > 100000000:  # Large countries (China, India, etc.)
+        population_factor = 0.6
+    elif population > 50000000:  # Medium-large countries
+        population_factor = 0.8
+    elif population > 10000000:  # Medium countries
+        population_factor = 1.0
+    elif population > 1000000:  # Small-medium countries
+        population_factor = 1.2
+    else:  # Small countries
+        population_factor = 1.4
+    
+    # Calculate final GDP per capita with variation
+    estimated_gdp_per_capita = base_gdp_per_capita * variation_factor * population_factor
     estimated_gdp = estimated_gdp_per_capita * population if population > 0 else 0
     
-    # Estimate HDI based on GDP per capita
+    # Estimate HDI based on GDP per capita with additional variation
     if estimated_gdp_per_capita > 50000:
-        estimated_hdi = 0.9 + (estimated_gdp_per_capita - 50000) / 1000000
+        base_hdi = 0.9 + (estimated_gdp_per_capita - 50000) / 1000000
     elif estimated_gdp_per_capita > 20000:
-        estimated_hdi = 0.7 + (estimated_gdp_per_capita - 20000) / 100000
+        base_hdi = 0.7 + (estimated_gdp_per_capita - 20000) / 100000
     elif estimated_gdp_per_capita > 5000:
-        estimated_hdi = 0.5 + (estimated_gdp_per_capita - 5000) / 30000
+        base_hdi = 0.5 + (estimated_gdp_per_capita - 5000) / 30000
     else:
-        estimated_hdi = 0.3 + estimated_gdp_per_capita / 10000
+        base_hdi = 0.3 + estimated_gdp_per_capita / 10000
     
+    # Add variation to HDI based on country characteristics
+    hdi_variation = (country_hash % 20 - 10) / 1000  # ±0.01 variation
+    estimated_hdi = base_hdi + hdi_variation
     estimated_hdi = min(0.99, max(0.3, estimated_hdi))  # Clamp between 0.3 and 0.99
     
-    # Estimate life expectancy based on HDI
-    estimated_life_expectancy = 50 + (estimated_hdi * 35)
+    # Estimate life expectancy based on HDI with variation
+    base_life_expectancy = 50 + (estimated_hdi * 35)
+    life_variation = (country_hash % 10 - 5)  # ±5 years variation
+    estimated_life_expectancy = base_life_expectancy + life_variation
+    estimated_life_expectancy = min(85, max(50, estimated_life_expectancy))  # Clamp between 50-85
     
-    # Estimate internet penetration based on HDI
-    estimated_internet = min(95, max(5, estimated_hdi * 100))
+    # Estimate internet penetration based on HDI with variation
+    base_internet = estimated_hdi * 100
+    internet_variation = (country_hash % 15 - 7.5)  # ±7.5% variation
+    estimated_internet = base_internet + internet_variation
+    estimated_internet = min(95, max(5, estimated_internet))  # Clamp between 5-95%
     
     return {
         'gdp': estimated_gdp,
