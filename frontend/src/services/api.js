@@ -10,6 +10,20 @@ const apiClient = axios.create({
   },
 })
 
+// Add token to requests if available
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => {
+    return Promise.reject(error)
+  }
+)
+
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
@@ -62,12 +76,94 @@ export const countryAPI = {
     }
   },
 
+  async getHistoricalData(countryName, indicator = 'NY.GDP.MKTP.CD', years = 10) {
+    try {
+      const response = await apiClient.get(`/api/historical/${countryName}`, {
+        params: { indicator, years }
+      })
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to fetch historical data')
+    }
+  },
+
   async healthCheck() {
     try {
       const response = await apiClient.get('/api/health')
       return response.data
     } catch (error) {
       throw new Error('API health check failed')
+    }
+  }
+}
+
+export const authAPI = {
+  async login(username, password) {
+    try {
+      const response = await apiClient.post('/api/auth/login', {
+        username,
+        password
+      })
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Login failed')
+    }
+  },
+
+  async register(username, email, password) {
+    try {
+      const response = await apiClient.post('/api/auth/register', {
+        username,
+        email,
+        password
+      })
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Registration failed')
+    }
+  }
+}
+
+export const savedComparisonsAPI = {
+  async getSavedComparisons() {
+    try {
+      const response = await apiClient.get('/api/saved-comparisons')
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to fetch saved comparisons')
+    }
+  },
+
+  async saveComparison(country1Name, country2Name, comparisonData) {
+    try {
+      const response = await apiClient.post('/api/saved-comparisons', {
+        country1_name: country1Name,
+        country2_name: country2Name,
+        comparison_data: comparisonData
+      })
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to save comparison')
+    }
+  }
+}
+
+export const userPreferencesAPI = {
+  async getPreferences() {
+    try {
+      const response = await apiClient.get('/api/user/preferences')
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to fetch preferences')
+    }
+  },
+
+  async updatePreferences(preferences) {
+    try {
+      const response = await apiClient.put('/api/user/preferences', preferences)
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Failed to update preferences')
     }
   }
 }

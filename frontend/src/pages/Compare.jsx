@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import { useCountry } from '../context/CountryContext'
+import { useAuth } from '../context/AuthContext'
 import CountrySelector from '../components/CountrySelector'
 import LoadingSpinner from '../components/LoadingSpinner'
 import RadarChart from '../components/charts/RadarChart'
 import BarChart from '../components/charts/BarChart'
+import LineChart from '../components/charts/LineChart'
 import ComparisonMetrics from '../components/charts/ComparisonMetrics'
-import { ArrowRight, RotateCcw, AlertCircle } from 'lucide-react'
+import { ArrowRight, RotateCcw, AlertCircle, Bookmark, TrendingUp, Save } from 'lucide-react'
+import { countryAPI, savedComparisonsAPI } from '../services/api'
 
 function Compare() {
   const { 
@@ -21,7 +24,12 @@ function Compare() {
     clearComparison 
   } = useCountry()
 
+  const { isAuthenticated } = useAuth()
   const [canCompare, setCanCompare] = useState(false)
+  const [historicalData, setHistoricalData] = useState(null)
+  const [historicalLoading, setHistoricalLoading] = useState(false)
+  const [selectedIndicator, setSelectedIndicator] = useState('NY.GDP.MKTP.CD')
+  const [savingComparison, setSavingComparison] = useState(false)
 
   useEffect(() => {
     setCanCompare(
@@ -44,7 +52,55 @@ function Compare() {
     selectCountry('country1', null)
     selectCountry('country2', null)
     clearComparison()
+    setHistoricalData(null)
   }
+
+  const fetchHistoricalData = async () => {
+    if (!selectedCountries.country1 || !selectedCountries.country2) return
+    
+    setHistoricalLoading(true)
+    try {
+      const [data1, data2] = await Promise.all([
+        countryAPI.getHistoricalData(selectedCountries.country1.name, selectedIndicator),
+        countryAPI.getHistoricalData(selectedCountries.country2.name, selectedIndicator)
+      ])
+      
+      setHistoricalData({
+        country1: data1,
+        country2: data2
+      })
+    } catch (error) {
+      console.error('Error fetching historical data:', error)
+    } finally {
+      setHistoricalLoading(false)
+    }
+  }
+
+  const handleSaveComparison = async () => {
+    if (!isAuthenticated || !comparison) return
+    
+    setSavingComparison(true)
+    try {
+      await savedComparisonsAPI.saveComparison(
+        comparison.country1.name,
+        comparison.country2.name,
+        comparison
+      )
+      // Show success message or update UI
+    } catch (error) {
+      console.error('Error saving comparison:', error)
+    } finally {
+      setSavingComparison(false)
+    }
+  }
+
+  const indicators = [
+    { value: 'NY.GDP.MKTP.CD', label: 'GDP (Current US$)' },
+    { value: 'NY.GDP.PCAP.CD', label: 'GDP per Capita' },
+    { value: 'SP.DYN.LE00.IN', label: 'Life Expectancy' },
+    { value: 'IT.NET.USER.ZS', label: 'Internet Users (%)' },
+    { value: 'SP.POP.TOTL', label: 'Population' }
+  ]
 
   if (loading) {
     return (
@@ -133,6 +189,26 @@ function Compare() {
               </>
             )}
           </button>
+          
+          {isAuthenticated && comparison && (
+            <button
+              onClick={handleSaveComparison}
+              disabled={savingComparison}
+              className="btn-secondary flex items-center space-x-2"
+            >
+              {savingComparison ? (
+                <>
+                  <LoadingSpinner size="sm" text="" />
+                  <span>Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  <span>Save Comparison</span>
+                </>
+              )}
+            </button>
+          )}
           
           {(selectedCountries.country1 || selectedCountries.country2 || comparison) && (
             <button
@@ -250,6 +326,70 @@ function Compare() {
               country1Name={comparison.country1.name}
               country2Name={comparison.country2.name}
             />
+          </div>
+
+          {/* Historical Data Section */}
+          <div className="card">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">Historical Trends</h3>
+                <p className="text-dark-400 text-sm">
+                  Compare historical data trends between the two countries
+                </p>
+              </div>
+              <button
+                onClick={fetchHistoricalData}
+                disabled={historicalLoading}
+                className="btn-secondary flex items-center space-x-2"
+              >
+                {historicalLoading ? (
+                  <>
+                    <LoadingSpinner size="sm" text="" />
+                    <span>Loading...</span>
+                  </>
+                ) : (
+                  <>
+                    <TrendingUp className="h-4 w-4" />
+                    <span>Load Trends</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Indicator Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-white mb-2">
+                Select Indicator
+              </label>
+              <select
+                value={selectedIndicator}
+                onChange={(e) => setSelectedIndicator(e.target.value)}
+                className="input-field"
+              >
+                {indicators.map(indicator => (
+                  <option key={indicator.value} value={indicator.value}>
+                    {indicator.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Line Chart */}
+            {historicalData && (
+              <LineChart
+                historicalData={historicalData}
+                country1Name={comparison.country1.name}
+                country2Name={comparison.country2.name}
+                indicator={selectedIndicator}
+              />
+            )}
+
+            {!historicalData && !historicalLoading && (
+              <div className="text-center py-8">
+                <TrendingUp className="h-12 w-12 text-dark-400 mx-auto mb-4" />
+                <p className="text-dark-400">Click "Load Trends" to view historical data</p>
+              </div>
+            )}
           </div>
 
           {/* Detailed Metrics */}

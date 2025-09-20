@@ -3,6 +3,7 @@ from flask_restful import Api, Resource
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 import requests
 import os
@@ -11,6 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 import json
+import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,12 +25,15 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
     'sqlite:///countrycompare.db'
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-string')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
 
 # Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 api = Api(app)
 CORS(app)
+jwt = JWTManager(app)
 
 # Data classes for clean data structures
 @dataclass
@@ -99,6 +104,7 @@ class Comparison(db.Model):
     country2_name = db.Column(db.String(100), nullable=False)
     comparison_data = db.Column(db.Text, nullable=False)  # JSON string
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     
     def to_dict(self):
         return {
@@ -106,8 +112,33 @@ class Comparison(db.Model):
             'country1_name': self.country1_name,
             'country2_name': self.country2_name,
             'comparison_data': json.loads(self.comparison_data),
-            'created_at': self.created_at.isoformat()
+            'created_at': self.created_at.isoformat(),
+            'user_id': self.user_id
         }
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    preferences = db.Column(db.Text, nullable=True)  # JSON string for user preferences
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'created_at': self.created_at.isoformat(),
+            'preferences': json.loads(self.preferences) if self.preferences else {}
+        }
+    
+    def set_password(self, password):
+        self.password_hash = hashlib.sha256(password.encode()).hexdigest()
+    
+    def check_password(self, password):
+        return self.password_hash == hashlib.sha256(password.encode()).hexdigest()
 
 # API Service Classes
 class RestCountriesService:
@@ -143,21 +174,131 @@ class RestCountriesService:
 class WorldBankService:
     BASE_URL = "https://api.worldbank.org/v2"
     
+    # Country name to ISO code mapping
+    COUNTRY_ISO_MAP = {
+        'United States': 'US', 'China': 'CN', 'Japan': 'JP', 'Germany': 'DE',
+        'United Kingdom': 'GB', 'India': 'IN', 'France': 'FR', 'Italy': 'IT',
+        'Brazil': 'BR', 'Canada': 'CA', 'Russia': 'RU', 'South Korea': 'KR',
+        'Australia': 'AU', 'Spain': 'ES', 'Mexico': 'MX', 'Indonesia': 'ID',
+        'Netherlands': 'NL', 'Saudi Arabia': 'SA', 'Turkey': 'TR', 'Switzerland': 'CH',
+        'Taiwan': 'TW', 'Poland': 'PL', 'Belgium': 'BE', 'Thailand': 'TH',
+        'Nigeria': 'NG', 'Argentina': 'AR', 'Norway': 'NO', 'Israel': 'IL',
+        'South Africa': 'ZA', 'Ireland': 'IE', 'Bangladesh': 'BD', 'Chile': 'CL',
+        'Finland': 'FI', 'Philippines': 'PH', 'Vietnam': 'VN', 'Portugal': 'PT',
+        'Peru': 'PE', 'Greece': 'GR', 'New Zealand': 'NZ', 'Iraq': 'IQ',
+        'Algeria': 'DZ', 'Qatar': 'QA', 'Kazakhstan': 'KZ', 'Kuwait': 'KW',
+        'Ukraine': 'UA', 'Morocco': 'MA', 'Ecuador': 'EC', 'Ethiopia': 'ET',
+        'Angola': 'AO', 'Oman': 'OM', 'Venezuela': 'VE', 'Ghana': 'GH',
+        'Kenya': 'KE', 'Uzbekistan': 'UZ', 'Myanmar': 'MM', 'Tanzania': 'TZ',
+        'Syria': 'SY', 'Uganda': 'UG', 'Yemen': 'YE', 'Nepal': 'NP',
+        'Madagascar': 'MG', 'Cameroon': 'CM', 'Côte d\'Ivoire': 'CI', 'Niger': 'NE',
+        'Burkina Faso': 'BF', 'Mali': 'ML', 'Malawi': 'MW', 'Zambia': 'ZM',
+        'Somalia': 'SO', 'Senegal': 'SN', 'Chad': 'TD', 'Zimbabwe': 'ZW',
+        'Guinea': 'GN', 'Rwanda': 'RW', 'Benin': 'BJ', 'Burundi': 'BI',
+        'Tunisia': 'TN', 'South Sudan': 'SS', 'Togo': 'TG', 'Sierra Leone': 'SL',
+        'Libya': 'LY', 'Liberia': 'LR', 'Central African Republic': 'CF',
+        'Mauritania': 'MR', 'Eritrea': 'ER', 'Gambia': 'GM', 'Botswana': 'BW',
+        'Gabon': 'GA', 'Lesotho': 'LS', 'Guinea-Bissau': 'GW', 'Equatorial Guinea': 'GQ',
+        'Mauritius': 'MU', 'Eswatini': 'SZ', 'Djibouti': 'DJ', 'Fiji': 'FJ',
+        'Comoros': 'KM', 'Guyana': 'GY', 'Bhutan': 'BT', 'Solomon Islands': 'SB',
+        'Luxembourg': 'LU', 'Montenegro': 'ME', 'Suriname': 'SR', 'Cape Verde': 'CV',
+        'Micronesia': 'FM', 'Maldives': 'MV', 'Brunei': 'BN', 'Belize': 'BZ',
+        'Bahamas': 'BS', 'Iceland': 'IS', 'Vanuatu': 'VU', 'Barbados': 'BB',
+        'Sao Tome and Principe': 'ST', 'Samoa': 'WS', 'Saint Lucia': 'LC',
+        'Kiribati': 'KI', 'Grenada': 'GD', 'Saint Vincent and the Grenadines': 'VC',
+        'Tonga': 'TO', 'Seychelles': 'SC', 'Antigua and Barbuda': 'AG',
+        'Andorra': 'AD', 'Dominica': 'DM', 'Marshall Islands': 'MH',
+        'Saint Kitts and Nevis': 'KN', 'Liechtenstein': 'LI', 'Monaco': 'MC',
+        'San Marino': 'SM', 'Palau': 'PW', 'Tuvalu': 'TV', 'Nauru': 'NR',
+        'Holy See': 'VA'
+    }
+    
     @staticmethod
-    def get_gdp_data(country_code, year=2022):
-        """Fetch GDP data from World Bank API"""
+    def get_country_iso_code(country_name):
+        """Get ISO code for country name"""
+        return WorldBankService.COUNTRY_ISO_MAP.get(country_name, None)
+    
+    @staticmethod
+    def get_economic_data(country_name, indicators=None):
+        """Fetch comprehensive economic data from World Bank API"""
+        if indicators is None:
+            indicators = {
+                'NY.GDP.MKTP.CD': 'gdp',  # GDP (current US$)
+                'NY.GDP.PCAP.CD': 'gdp_per_capita',  # GDP per capita (current US$)
+                'SP.DYN.LE00.IN': 'life_expectancy',  # Life expectancy at birth
+                'IT.NET.USER.ZS': 'internet_penetration',  # Internet users (% of population)
+                'SP.POP.TOTL': 'population'  # Population, total
+            }
+        
+        iso_code = WorldBankService.get_country_iso_code(country_name)
+        if not iso_code:
+            logger.warning(f"No ISO code found for {country_name}")
+            return None
+        
+        data = {}
+        current_year = datetime.now().year
+        
+        for indicator_code, key in indicators.items():
+            try:
+                response = requests.get(
+                    f"{WorldBankService.BASE_URL}/country/{iso_code}/indicator/{indicator_code}",
+                    params={'date': f'{current_year-5}:{current_year}', 'format': 'json', 'per_page': 1000},
+                    timeout=10
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                if result and len(result) > 1 and result[1]:
+                    # Get the most recent non-null value
+                    for item in result[1]:
+                        if item['value'] is not None:
+                            data[key] = item['value']
+                            data[f'{key}_year'] = item['date']
+                            break
+                            
+            except requests.RequestException as e:
+                logger.error(f"Error fetching {indicator_code} for {country_name}: {e}")
+                continue
+        
+        return data if data else None
+    
+    @staticmethod
+    def get_historical_data(country_name, indicator, years=10):
+        """Get historical data for a specific indicator"""
+        iso_code = WorldBankService.get_country_iso_code(country_name)
+        if not iso_code:
+            return None
+        
+        current_year = datetime.now().year
+        start_year = current_year - years
+        
         try:
-            # This is a simplified version - you'd need to map country names to ISO codes
             response = requests.get(
-                f"{WorldBankService.BASE_URL}/country/{country_code}/indicator/NY.GDP.MKTP.CD",
-                params={'date': year, 'format': 'json'},
+                f"{WorldBankService.BASE_URL}/country/{iso_code}/indicator/{indicator}",
+                params={'date': f'{start_year}:{current_year}', 'format': 'json', 'per_page': 1000},
                 timeout=10
             )
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            
+            if result and len(result) > 1 and result[1]:
+                historical_data = []
+                for item in result[1]:
+                    if item['value'] is not None:
+                        historical_data.append({
+                            'year': int(item['date']),
+                            'value': item['value']
+                        })
+                
+                # Sort by year
+                historical_data.sort(key=lambda x: x['year'])
+                return historical_data
+                
         except requests.RequestException as e:
-            logger.error(f"Error fetching GDP data for {country_code}: {e}")
+            logger.error(f"Error fetching historical data for {country_name}: {e}")
             return None
+        
+        return None
 
 # Cache for API responses
 class APICache:
@@ -182,9 +323,35 @@ class APICache:
         APICache._cache.clear()
 
 # Helper functions
-def get_sample_economic_data(country_name, population, region=None):
-    """Generate sample economic data for demonstration purposes"""
-    # This is sample data for demonstration - in production you'd fetch from World Bank API
+def get_economic_data(country_name, population, region=None):
+    """Get economic data from World Bank API with fallback to sample data"""
+    # Try to get real data from World Bank API first
+    world_bank_data = WorldBankService.get_economic_data(country_name)
+    
+    if world_bank_data:
+        # Calculate HDI if not available (simplified estimation)
+        if 'hdi' not in world_bank_data and 'gdp_per_capita' in world_bank_data:
+            gdp_per_capita = world_bank_data['gdp_per_capita']
+            if gdp_per_capita > 50000:
+                estimated_hdi = 0.9 + (gdp_per_capita - 50000) / 1000000
+            elif gdp_per_capita > 20000:
+                estimated_hdi = 0.7 + (gdp_per_capita - 20000) / 100000
+            elif gdp_per_capita > 5000:
+                estimated_hdi = 0.5 + (gdp_per_capita - 5000) / 30000
+            else:
+                estimated_hdi = 0.3 + gdp_per_capita / 10000
+            world_bank_data['hdi'] = min(0.99, max(0.3, estimated_hdi))
+        
+        return {
+            'gdp': world_bank_data.get('gdp', 0),
+            'gdp_per_capita': world_bank_data.get('gdp_per_capita', 0),
+            'hdi': world_bank_data.get('hdi', 0),
+            'life_expectancy': world_bank_data.get('life_expectancy', 0),
+            'internet_penetration': world_bank_data.get('internet_penetration', 0),
+            'data_source': 'world_bank'
+        }
+    
+    # Fallback to sample data for countries not in World Bank
     sample_data = {
         'Morocco': {'gdp': 126000000000, 'hdi': 0.683, 'life_expectancy': 76.1, 'internet_penetration': 74.4},
         'Algeria': {'gdp': 163000000000, 'hdi': 0.748, 'life_expectancy': 77.0, 'internet_penetration': 63.0},
@@ -216,44 +383,30 @@ def get_sample_economic_data(country_name, population, region=None):
             'gdp_per_capita': gdp_per_capita,
             'hdi': data.get('hdi', 0),
             'life_expectancy': data.get('life_expectancy', 0),
-            'internet_penetration': data.get('internet_penetration', 0)
+            'internet_penetration': data.get('internet_penetration', 0),
+            'data_source': 'sample'
         }
     
     # Fallback: Generate realistic economic data based on population, region, and country characteristics
-    # This ensures all countries have economic data with realistic variation
-    
-    # More detailed region multipliers
     region_multipliers = {
-        'Europe': 1.8,
-        'North America': 2.0,
-        'Asia': 0.9,
-        'South America': 0.7,
-        'Africa': 0.4,
-        'Oceania': 1.5,
-        'Antarctic': 0.1
+        'Europe': 1.8, 'North America': 2.0, 'Asia': 0.9, 'South America': 0.7,
+        'Africa': 0.4, 'Oceania': 1.5, 'Antarctic': 0.1
     }
     
-    # Base GDP per capita by region
     base_gdp_by_region = {
-        'Europe': 25000,
-        'North America': 30000,
-        'Asia': 8000,
-        'South America': 12000,
-        'Africa': 3000,
-        'Oceania': 20000,
-        'Antarctic': 1000
+        'Europe': 25000, 'North America': 30000, 'Asia': 8000, 'South America': 12000,
+        'Africa': 3000, 'Oceania': 20000, 'Antarctic': 1000
     }
     
     region_key = region if region else 'Asia'
     base_gdp_per_capita = base_gdp_by_region.get(region_key, 8000)
     
     # Add variation based on country name hash for uniqueness
-    import hashlib
     country_hash = int(hashlib.md5(country_name.encode()).hexdigest()[:8], 16)
     variation_factor = 0.5 + (country_hash % 100) / 100  # 0.5 to 1.5 multiplier
     
     # Adjust based on population size
-    if population > 100000000:  # Large countries (China, India, etc.)
+    if population > 100000000:  # Large countries
         population_factor = 0.6
     elif population > 50000000:  # Medium-large countries
         population_factor = 0.8
@@ -268,7 +421,7 @@ def get_sample_economic_data(country_name, population, region=None):
     estimated_gdp_per_capita = base_gdp_per_capita * variation_factor * population_factor
     estimated_gdp = estimated_gdp_per_capita * population if population > 0 else 0
     
-    # Estimate HDI based on GDP per capita with additional variation
+    # Estimate HDI based on GDP per capita
     if estimated_gdp_per_capita > 50000:
         base_hdi = 0.9 + (estimated_gdp_per_capita - 50000) / 1000000
     elif estimated_gdp_per_capita > 20000:
@@ -278,18 +431,18 @@ def get_sample_economic_data(country_name, population, region=None):
     else:
         base_hdi = 0.3 + estimated_gdp_per_capita / 10000
     
-    # Add variation to HDI based on country characteristics
+    # Add variation to HDI
     hdi_variation = (country_hash % 20 - 10) / 1000  # ±0.01 variation
     estimated_hdi = base_hdi + hdi_variation
     estimated_hdi = min(0.99, max(0.3, estimated_hdi))  # Clamp between 0.3 and 0.99
     
-    # Estimate life expectancy based on HDI with variation
+    # Estimate life expectancy based on HDI
     base_life_expectancy = 50 + (estimated_hdi * 35)
     life_variation = (country_hash % 10 - 5)  # ±5 years variation
     estimated_life_expectancy = base_life_expectancy + life_variation
     estimated_life_expectancy = min(85, max(50, estimated_life_expectancy))  # Clamp between 50-85
     
-    # Estimate internet penetration based on HDI with variation
+    # Estimate internet penetration based on HDI
     base_internet = estimated_hdi * 100
     internet_variation = (country_hash % 15 - 7.5)  # ±7.5% variation
     estimated_internet = base_internet + internet_variation
@@ -300,7 +453,8 @@ def get_sample_economic_data(country_name, population, region=None):
         'gdp_per_capita': estimated_gdp_per_capita,
         'hdi': round(estimated_hdi, 3),
         'life_expectancy': round(estimated_life_expectancy, 1),
-        'internet_penetration': round(estimated_internet, 1)
+        'internet_penetration': round(estimated_internet, 1),
+        'data_source': 'estimated'
     }
 
 def parse_country_data(country_data, additional_data=None):
@@ -397,7 +551,7 @@ class CountriesResource(Resource):
                 country_name = country_data.get('name', {}).get('common', 'Unknown')
                 population = country_data.get('population', 0)
                 region = country_data.get('region', 'Unknown')
-                additional_data = get_sample_economic_data(country_name, population, region)
+                additional_data = get_economic_data(country_name, population, region)
                 
                 country_info = parse_country_data(country_data, additional_data)
                 if country_info:
@@ -438,7 +592,7 @@ class CountryResource(Resource):
             # Get economic data for this country
             population = country_data[0].get('population', 0)
             region = country_data[0].get('region', 'Unknown')
-            additional_data = get_sample_economic_data(country_name, population, region)
+            additional_data = get_economic_data(country_name, population, region)
             
             country_info = parse_country_data(country_data[0], additional_data)
             if not country_info:
@@ -541,10 +695,191 @@ class CompareResource(Resource):
             logger.error(f"Error in CompareResource: {e}")
             return {'error': 'Failed to compare countries'}, 500
 
+# Authentication Resources
+class AuthResource(Resource):
+    def post(self):
+        """Register a new user"""
+        try:
+            data = request.get_json()
+            username = data.get('username')
+            email = data.get('email')
+            password = data.get('password')
+            
+            if not username or not email or not password:
+                return {'error': 'Username, email, and password are required'}, 400
+            
+            # Check if user already exists
+            if User.query.filter_by(username=username).first():
+                return {'error': 'Username already exists'}, 400
+            
+            if User.query.filter_by(email=email).first():
+                return {'error': 'Email already exists'}, 400
+            
+            # Create new user
+            user = User(username=username, email=email)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+            
+            # Create access token
+            access_token = create_access_token(identity=user.id)
+            
+            return {
+                'message': 'User created successfully',
+                'access_token': access_token,
+                'user': user.to_dict()
+            }, 201
+            
+        except Exception as e:
+            logger.error(f"Error in AuthResource POST: {e}")
+            return {'error': 'Failed to create user'}, 500
+
+class LoginResource(Resource):
+    def post(self):
+        """Login user"""
+        try:
+            data = request.get_json()
+            username = data.get('username')
+            password = data.get('password')
+            
+            if not username or not password:
+                return {'error': 'Username and password are required'}, 400
+            
+            # Find user
+            user = User.query.filter_by(username=username).first()
+            if not user or not user.check_password(password):
+                return {'error': 'Invalid credentials'}, 401
+            
+            # Create access token
+            access_token = create_access_token(identity=user.id)
+            
+            return {
+                'message': 'Login successful',
+                'access_token': access_token,
+                'user': user.to_dict()
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"Error in LoginResource: {e}")
+            return {'error': 'Login failed'}, 500
+
+class HistoricalDataResource(Resource):
+    def get(self, country_name):
+        """Get historical data for a country"""
+        try:
+            indicator = request.args.get('indicator', 'NY.GDP.MKTP.CD')
+            years = int(request.args.get('years', 10))
+            
+            historical_data = WorldBankService.get_historical_data(country_name, indicator, years)
+            
+            if not historical_data:
+                return {'error': 'No historical data available'}, 404
+            
+            return jsonify({
+                'country': country_name,
+                'indicator': indicator,
+                'data': historical_data
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in HistoricalDataResource: {e}")
+            return {'error': 'Failed to fetch historical data'}, 500
+
+class SavedComparisonsResource(Resource):
+    @jwt_required()
+    def get(self):
+        """Get user's saved comparisons"""
+        try:
+            user_id = get_jwt_identity()
+            comparisons = Comparison.query.filter_by(user_id=user_id).order_by(Comparison.created_at.desc()).all()
+            
+            return jsonify([comp.to_dict() for comp in comparisons])
+            
+        except Exception as e:
+            logger.error(f"Error in SavedComparisonsResource GET: {e}")
+            return {'error': 'Failed to fetch saved comparisons'}, 500
+    
+    @jwt_required()
+    def post(self):
+        """Save a comparison"""
+        try:
+            user_id = get_jwt_identity()
+            data = request.get_json()
+            
+            country1_name = data.get('country1_name')
+            country2_name = data.get('country2_name')
+            comparison_data = data.get('comparison_data')
+            
+            if not all([country1_name, country2_name, comparison_data]):
+                return {'error': 'Country names and comparison data are required'}, 400
+            
+            comparison = Comparison(
+                country1_name=country1_name,
+                country2_name=country2_name,
+                comparison_data=json.dumps(comparison_data),
+                user_id=user_id
+            )
+            
+            db.session.add(comparison)
+            db.session.commit()
+            
+            return jsonify(comparison.to_dict()), 201
+            
+        except Exception as e:
+            logger.error(f"Error in SavedComparisonsResource POST: {e}")
+            return {'error': 'Failed to save comparison'}, 500
+
+class UserPreferencesResource(Resource):
+    @jwt_required()
+    def get(self):
+        """Get user preferences"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get(user_id)
+            
+            if not user:
+                return {'error': 'User not found'}, 404
+            
+            return jsonify({
+                'preferences': json.loads(user.preferences) if user.preferences else {}
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in UserPreferencesResource GET: {e}")
+            return {'error': 'Failed to fetch preferences'}, 500
+    
+    @jwt_required()
+    def put(self):
+        """Update user preferences"""
+        try:
+            user_id = get_jwt_identity()
+            user = User.query.get(user_id)
+            
+            if not user:
+                return {'error': 'User not found'}, 404
+            
+            data = request.get_json()
+            user.preferences = json.dumps(data)
+            db.session.commit()
+            
+            return jsonify({
+                'message': 'Preferences updated successfully',
+                'preferences': data
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in UserPreferencesResource PUT: {e}")
+            return {'error': 'Failed to update preferences'}, 500
+
 # API Routes
 api.add_resource(CountriesResource, '/api/countries')
 api.add_resource(CountryResource, '/api/countries/<string:country_name>')
 api.add_resource(CompareResource, '/api/compare')
+api.add_resource(AuthResource, '/api/auth/register')
+api.add_resource(LoginResource, '/api/auth/login')
+api.add_resource(HistoricalDataResource, '/api/historical/<string:country_name>')
+api.add_resource(SavedComparisonsResource, '/api/saved-comparisons')
+api.add_resource(UserPreferencesResource, '/api/user/preferences')
 
 @app.route('/api/health')
 def health_check():
