@@ -121,6 +121,17 @@ export const authAPI = {
     } catch (error) {
       throw new Error(error.response?.data?.error || 'Registration failed')
     }
+  },
+
+  async googleAuth(token) {
+    try {
+      const response = await apiClient.post('/api/auth/google', {
+        token
+      })
+      return response.data
+    } catch (error) {
+      throw new Error(error.response?.data?.error || 'Google authentication failed')
+    }
   }
 }
 

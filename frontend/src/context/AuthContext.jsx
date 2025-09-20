@@ -109,6 +109,22 @@ export function AuthProvider({ children }) {
     }
   }
 
+  const googleAuth = async (token) => {
+    dispatch({ type: 'AUTH_START' })
+    try {
+      const response = await authAPI.googleAuth(token)
+      localStorage.setItem('token', response.access_token)
+      dispatch({
+        type: 'AUTH_SUCCESS',
+        payload: { user: response.user, token: response.access_token }
+      })
+      return response
+    } catch (error) {
+      dispatch({ type: 'AUTH_ERROR', payload: error.message })
+      throw error
+    }
+  }
+
   const logout = () => {
     localStorage.removeItem('token')
     dispatch({ type: 'LOGOUT' })
@@ -122,6 +138,7 @@ export function AuthProvider({ children }) {
     ...state,
     login,
     register,
+    googleAuth,
     logout,
     clearError
   }

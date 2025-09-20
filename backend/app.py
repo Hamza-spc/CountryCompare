@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, url_for
 from flask_restful import Api, Resource
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 import json
 import hashlib
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +29,10 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-string')
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '5900947611-8ihsqa6pj5lasvjdbvhnqo2g8abv9q8m.apps.googleusercontent.com')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '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')
 
 # Initialize extensions
 db = SQLAlchemy(app)
@@ -871,12 +877,93 @@ class UserPreferencesResource(Resource):
             logger.error(f"Error in UserPreferencesResource PUT: {e}")
             return {'error': 'Failed to update preferences'}, 500
 
+class GoogleAuthResource(Resource):
+    def post(self):
+        """Authenticate with Google OAuth"""
+        try:
+            data = request.get_json()
+            token = data.get('token')
+            
+            if not token:
+                return {'error': 'Google token is required'}, 400
+            
+            # Verify the Google token
+            try:
+                idinfo = id_token.verify_oauth2_token(
+                    token, 
+                    google_requests.Request(), 
+                    GOOGLE_CLIENT_ID
+                )
+                
+                # Extract user information
+                google_id = idinfo['sub']
+                email = idinfo['email']
+                name = idinfo.get('name', '')
+                picture = idinfo.get('picture', '')
+                
+            except ValueError as e:
+                logger.error(f"Invalid Google token: {e}")
+                return {'error': 'Invalid Google token'}, 401
+            
+            # Check if user exists
+            user = User.query.filter_by(email=email).first()
+            
+            if not user:
+                # Create new user
+                username = email.split('@')[0]  # Use email prefix as username
+                # Ensure username is unique
+                counter = 1
+                original_username = username
+                while User.query.filter_by(username=username).first():
+                    username = f"{original_username}{counter}"
+                    counter += 1
+                
+                user = User(
+                    username=username,
+                    email=email,
+                    password_hash='',  # No password for OAuth users
+                    preferences=json.dumps({
+                        'name': name,
+                        'picture': picture,
+                        'google_id': google_id
+                    })
+                )
+                db.session.add(user)
+                db.session.commit()
+            else:
+                # Update existing user's Google info
+                if not user.preferences:
+                    user.preferences = '{}'
+                
+                prefs = json.loads(user.preferences)
+                prefs.update({
+                    'name': name,
+                    'picture': picture,
+                    'google_id': google_id
+                })
+                user.preferences = json.dumps(prefs)
+                db.session.commit()
+            
+            # Create access token
+            access_token = create_access_token(identity=user.id)
+            
+            return {
+                'message': 'Google authentication successful',
+                'access_token': access_token,
+                'user': user.to_dict()
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"Error in GoogleAuthResource: {e}")
+            return {'error': 'Google authentication failed'}, 500
+
 # API Routes
 api.add_resource(CountriesResource, '/api/countries')
 api.add_resource(CountryResource, '/api/countries/<string:country_name>')
 api.add_resource(CompareResource, '/api/compare')
 api.add_resource(AuthResource, '/api/auth/register')
 api.add_resource(LoginResource, '/api/auth/login')
+api.add_resource(GoogleAuthResource, '/api/auth/google')
 api.add_resource(HistoricalDataResource, '/api/historical/<string:country_name>')
 api.add_resource(SavedComparisonsResource, '/api/saved-comparisons')
 api.add_resource(UserPreferencesResource, '/api/user/preferences')
